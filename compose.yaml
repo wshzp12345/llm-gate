@@ -1,0 +1,72 @@
+name: llm-gateway
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_DB: gateway
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
+    volumes:
+      - gateway-data:/var/lib/postgresql/data
+      - ./deploy/local/postgres-password:/run/secrets/postgres-password:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  gateway-migrate:
+    build: .
+    image: llm-gateway:dev
+    entrypoint: ["gateway-deployment-migrate"]
+    command: ["--bootstrap", "/etc/gateway/bootstrap.json"]
+    # Host-created mode-0600 Secrets need the dev container's root reader on Linux.
+    user: "0:0"
+    volumes:
+      - ./deploy/bootstrap.dev.json:/etc/gateway/bootstrap.json:ro
+      - ./deploy/local:/run/gateway:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+  gateway:
+    build: .
+    image: llm-gateway:dev
+    command: ["--bootstrap", "/etc/gateway/bootstrap.json", "--enable-streaming"]
+    user: "0:0"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    ports:
+      - "127.0.0.1:${GATEWAY_MODEL_PORT:-8000}:8000"
+      - "127.0.0.1:${GATEWAY_MANAGEMENT_PORT:-8001}:8001"
+    volumes:
+      - ./deploy/bootstrap.dev.json:/etc/gateway/bootstrap.json:ro
+      - ./deploy/local:/run/gateway:ro
+    depends_on:
+      gateway-migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 35s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  collector:
+    image: otel/opentelemetry-collector:0.160.0
+    network_mode: service:gateway
+    command: ["--config=/etc/otelcol/config.yaml"]
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./deploy/otel-collector.dev.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      gateway:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  gateway-data:

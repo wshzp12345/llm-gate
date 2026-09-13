@@ -1,0 +1,84 @@
+name: gateway-recovery-acceptance
+services:
+  prepare:
+    image: llm-gateway:dev
+    entrypoint: ["python", "/acceptance/prepare.py"]
+    user: "0:0"
+    volumes:
+      - ./prepare.py:/acceptance/prepare.py:ro
+      - ../bootstrap.dev.json:/acceptance/bootstrap.json:ro
+      - state:/fixtures
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_DB: gateway
+      POSTGRES_PASSWORD: acceptance-only
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+  migrate:
+    image: llm-gateway:dev
+    entrypoint: ["gateway-deployment-migrate", "--bootstrap", "/fixtures/bootstrap.json"]
+    user: "0:0"
+    volumes: ["state:/fixtures:ro"]
+    depends_on:
+      prepare: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
+  provider-a:
+    image: python:3.12-slim
+    command: ["python", "/acceptance/provider.py", "unavailable"]
+    volumes: ["./provider.py:/acceptance/provider.py:ro"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+  provider-b:
+    image: python:3.12-slim
+    command: ["python", "/acceptance/provider.py", "success"]
+    volumes: ["./provider.py:/acceptance/provider.py:ro"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+  gateway:
+    image: llm-gateway:dev
+    command: ["--bootstrap", "/fixtures/bootstrap.json", "--enable-streaming"]
+    user: "0:0"
+    read_only: true
+    volumes: ["state:/fixtures:ro"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      provider-a: {condition: service_healthy}
+      provider-b: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz')"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+  verify:
+    image: llm-gateway:dev
+    entrypoint: ["python", "/acceptance/verify.py"]
+    volumes:
+      - ./verify.py:/acceptance/verify.py:ro
+      - ../deepseek.bundle.json:/acceptance/bundle.json:ro
+    depends_on:
+      gateway: {condition: service_healthy}
+      collector: {condition: service_started}
+  collector:
+    image: otel/opentelemetry-collector:0.160.0
+    network_mode: service:gateway
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes: ["./otel-collector.yaml:/etc/otelcol/config.yaml:ro"]
+    depends_on:
+      gateway: {condition: service_healthy}
+networks:
+  default:
+    internal: true
+volumes:
+  state:

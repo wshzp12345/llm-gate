@@ -1,0 +1,16 @@
+{
+  "environment_id": "local-docker",
+  "startup_profile": "dev",
+  "authorization": {"mode": "dev_bypass"},
+  "bind_host": "0.0.0.0",
+  "model_port": 8000,
+  "management_port": 8001,
+  "telemetry": {"endpoint": "http://127.0.0.1:4318"},
+  "database_url_file": "/run/gateway/database-url",
+  "expected_schema_version": "0018_invocation_correlation.sql",
+  "fingerprint_keys": [{
+    "key_id": "dev-fingerprint", "key_version": "1", "role": "active",
+    "secret_ref": "dev-fingerprint-key", "file": "/run/gateway/fingerprint-key"
+  }],
+  "provider_secret_files": {"deepseek-api-key": "/run/gateway/provider.json"}
+}

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-gateway"
+version = "0.1.0.dev0"
+description = "Provider-neutral model gateway"
+requires-python = ">=3.12"
+dependencies = ["httpx==0.28.1", "httpcore==1.0.9", "psycopg[binary]==3.3.5", "rfc8785==0.1.4", "pydantic==2.13.5", "cryptography==50.0.1", "ruamel.yaml==0.19.1", "fastapi==0.141.1", "python-dotenv==1.2.1", "uvicorn==0.35.0"]
+
+[project.optional-dependencies]
+test = ["pytest==8.4.2"]
+
+[project.scripts]
+gateway = "llm_gateway.infrastructure.gateway:main"
+gateway-dev-init = "llm_gateway.infrastructure.development_init:main"
+gateway-deployment-migrate = "llm_gateway.infrastructure.deployment_migrate:main"
+gateway-migrate = "llm_gateway.infrastructure.migrate:main"
+gateway-dev-check = "llm_gateway.infrastructure.development_check:main"
+gateway-dev-management = "llm_gateway.infrastructure.development_management:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = ["postgres: requires a disposable PostgreSQL database via GATEWAY_TEST_DATABASE_URL"]
+
+[tool.setuptools.package-data]
+"llm_gateway.infrastructure" = ["migrations/*.sql"]

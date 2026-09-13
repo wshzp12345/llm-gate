@@ -1,0 +1,39 @@
+{
+  "kind": "bundle",
+  "bundle": {
+    "schema_version": "gateway.config/v1", "base_revision": "0",
+    "providers": {"deepseek": {
+      "status": "enabled", "adapter": {"type": "compatible", "version": "v1"},
+      "endpoint": {"base_url": "https://api.deepseek.com"},
+      "credential": {"secret_ref": "deepseek-api-key"},
+      "egress": {"allowed_hosts": ["api.deepseek.com"], "allowed_networks": ["public"], "proxy": "disabled"},
+      "transport": {"http_version": "1.1", "tls": {"trust": "system", "trust_bundle": null}},
+      "health": {"active_probe": null},
+      "rate_limit": {"max_concurrency": 2, "qps": 2, "burst": 2}
+    }},
+    "provider_model_bindings": {"deepseek-text": {
+      "status": "enabled", "provider": "deepseek", "upstream_model": "deepseek-v4-flash",
+      "capabilities": {"streaming": false, "tool_calling": false, "structured_output": "none"},
+      "limits": {"context_tokens": 8192, "max_output_tokens": 4096}, "pricing_table": "smoke-price"
+    }},
+    "model_aliases": {"general": {
+      "candidates": [{"binding": "deepseek-text", "service_level": "full", "priority": 0, "weight": 1}],
+      "routing_policy": "smoke-route", "safety_policy": "safety", "generation_defaults": {}, "structured_output": {}
+    }},
+    "routing_policies": {"smoke-route": {
+      "selection": {"strategy": "priority_weighted_without_replacement", "seed_profile": "gateway.routing-seed/v1"},
+      "retry": {"max_attempts": 1, "max_attempts_per_candidate": 1, "base_delay_ms": 100,
+        "multiplier": 2, "max_delay_ms": 1000, "jitter": "full", "max_retry_after_seconds": 5},
+      "fallback": {"mode": "pre_commit_only"},
+      "degradation": {"reduced_service": {"enabled": false}, "cache": {"enabled": false},
+        "terminal": {"mode": "preserve_live_failure"}}
+    }},
+    "pricing_tables": {"smoke-price": {
+      "currency": "USD", "unit": "per_million_tokens", "effective_from": "2026-09-12T00:00:00Z",
+      "rates": {"input": "0.22", "output": "0.66", "cached_input": "0.007", "reasoning_output": null},
+      "rounding": "half_even_12dp"
+    }},
+    "safety_policies": {"safety": {"mode": "provider_refusal_terminal"}},
+    "resource_policies": {"structured_output": {}, "idempotency": {}, "limits": {}}
+  }
+}
