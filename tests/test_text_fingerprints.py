@@ -10,7 +10,7 @@ from llm_gateway.adapters.text_fingerprints import request_fingerprint, executio
 from llm_gateway.application.active_configuration import LoadedConfiguration
 from llm_gateway.application.model_api import TextInvocationQuery
 from llm_gateway.domain.invocation import AuthorizationContext
-from llm_gateway.domain.model import Message
+from llm_gateway.domain.model import Message, OutputFormat
 from tests.test_fingerprint_leases import setup, deadline
 from tests.test_configuration_preparation import draft
 
@@ -72,8 +72,40 @@ def test_new_query_fields_require_an_explicit_fingerprint_profile_decision():
     assert {field.name for field in fields(TextInvocationQuery)} == {
         "requested_model", "messages", "max_output_tokens", "temperature", "top_p",
         "deprecated_max_tokens", "store_false_requested",
-        "body_bytes", "prompt", "prompt_reference", "stream", "stream_output",
+        "body_bytes", "prompt", "prompt_reference", "stream", "stream_output", "output_format",
     }
+
+
+def test_structured_mode_and_schema_change_both_fingerprints():
+    async def run():
+        keys, _, _ = setup()
+        assert await keys.validate_active()
+        async with keys.active(deadline=deadline()) as lease:
+            variants = (QUERY,
+                replace(QUERY, output_format=OutputFormat("json_object")),
+                replace(QUERY, output_format=OutputFormat("json_schema", "answer", '{"type":"object"}')),
+                replace(QUERY, output_format=OutputFormat("json_schema", "answer", '{"type":"array"}')))
+            requests = [request_fingerprint(item, AUTH, lease) for item in variants]
+            executions = [execution_fingerprint(item, snapshot(), lease, effective_limits=LIMITS) for item in variants]
+            assert len(set(requests)) == len(variants)
+            assert len(set(executions)) == len(variants)
+    asyncio.run(run())
+
+
+def test_extraction_policy_changes_structured_execution_identity_only():
+    async def run():
+        keys, _, _ = setup()
+        assert await keys.validate_active()
+        before = json.loads(snapshot().snapshot_json)
+        after = deepcopy(before)
+        after["resource_policies"]["structured_output"]["local_extraction_enabled"] = False
+        structured = replace(QUERY, output_format=OutputFormat("json_object"))
+        async with keys.active(deadline=deadline()) as lease:
+            assert execution_fingerprint(structured, snapshot(before), lease, effective_limits=LIMITS) != \
+                execution_fingerprint(structured, snapshot(after), lease, effective_limits=LIMITS)
+            assert execution_fingerprint(QUERY, snapshot(before), lease, effective_limits=LIMITS) == \
+                execution_fingerprint(QUERY, snapshot(after), lease, effective_limits=LIMITS)
+    asyncio.run(run())
 
 
 def test_execution_excludes_revision_unrelated_resources_prices_and_nonsemantic_tls_label():

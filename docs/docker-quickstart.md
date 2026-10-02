@@ -1,7 +1,7 @@
 # Docker/API 文本与流式链路
 
-本入口已组装 dev 模式的同步及 SSE 文本服务，不代表全部 v0.1 已完成。
-生产模式、Tools、Structured Output、缓存/降级、幂等重放、状态/取消 API 和完整主动探针调度尚未接入。
+本入口已组装 dev 模式的同步及 SSE 文本服务，并支持同步 JSON Object / JSON Schema 的本地结果校验，不代表全部 v0.1 已完成。
+结构化流式增量校验、完整 Schema 特性匹配及恢复、生产模式、Tools、缓存/降级、幂等重放、状态/取消 API 和完整主动探针调度尚未接入。
 `production`、未知启动模式、跨分支鉴权配置都会拒绝启动，不会退回 bypass。
 
 ## 首次启动
@@ -102,6 +102,34 @@ $json
 ```
 
 不要只检查 HTTP 200：还应确认最终正文非空、中文可读，并检查 `finish_reason`。
+
+### 同步结构化输出
+
+新发布的 `deploy/deepseek.bundle.json` 将 Binding 声明为 `json_object`，可在上述请求体中增加
+`response_format = @{ type = 'json_object' }`。同时在用户消息中明确要求 JSON，并在响应中检查
+`choices[0].message.content`。Gateway 会独立检查 JSON 语法、重复键和顶层对象；无效结果返回
+`400 structured_output_invalid`，不会伪装为 200。DeepSeek Chat Completions 不声明 JSON Schema 能力；
+只有配置为 `anthropic_messages/v1` 且 Binding 声明 `json_schema` 的候选可以接此类请求。
+目前 Schema 仅开放简单可精确翻译的关键字子集（`type`、`properties`、`required`、
+`additionalProperties`、`items`、原子值 `enum`、`const`、本地 `$defs`/`$ref` 及注释）；
+其余关键字在调用 Provider 前返回 `400 invalid_request`，不进行近似改写。
+已发布的 Active 配置不会随示例文件更新；需通过配置版本发布流程显式启用。若 Binding 同时
+声明 `streaming: true` 与 `structured_output: json_object`，可在上文 SSE 请求体增加
+`"response_format":{"type":"json_object"}`，并在提示中明确要求一个 JSON 对象。Gateway 在
+首个对象字节前保留前导空白，并在流结束时本地验证完整 JSON；失败流只有错误帧、没有 `[DONE]`。
+这一严格 JSON Object SSE 子集暂不从流式文本抽取 Markdown 围栏、BOM 或解释性前后缀，
+也不支持 `json_schema` 流式请求（返回 `422 unsupported_capability`）。
+
+### 第二协议配置边界
+
+Anthropic Messages 候选使用 Provider `adapter: {type: anthropic_messages, version: v1}`，
+`endpoint.base_url` 应包含 `/v1`（例如 `https://api.anthropic.com/v1`），
+Binding 可声明 `structured_output: json_schema`、`streaming: false`。
+其 `credential.secret_ref` 必须引用部署时显式挂载的独立 Secret；现有 DeepSeek Secret 不会被复用或转换。
+将该 Binding 放入一个 Model Alias 后，HTTP 请求仍通过同一个 `/v1/chat/completions` 入口，
+Gateway 根据 Alias 路由并在 Adapter 内改写成 Messages 协议。仓库测试
+`python -m pytest -q tests/test_anthropic_messages.py` 使用合成 Provider 证明两个 Alias 分别访问
+`/v1/chat/completions` 和 `/v1/messages`，不会调用真实供应商。
 
 | 现象 | 检查与处理 |
 | --- | --- |

@@ -140,12 +140,16 @@ class PostgresFullServiceTextExecution:
                     journal=SharedStreamAttemptJournal(resources.journal), output=query.stream_output,
                     commit=PostgresStreamCommit(self._store, admission.call_id),
                     classify=self._classify, draw_jitter=self._draw_jitter, control=control)
-                return await StreamingInvocation(executor,
-                    PostgresInvocationSettlement(self._store, admission.call_id)).execute(
+                settlement = (PostgresInvocationSettlement(self._store, admission.call_id)
+                              if query.output_format is None else
+                              PostgresInvocationSettlement(self._store, admission.call_id, structured_output=True))
+                return await StreamingInvocation(executor, settlement).execute(
                         plan.full, policy=plan.retry, deadline=deadline)
             executor = SynchronousAttemptExecutor(
                 runtime=_CheckpointedRuntime(resources.runtime, evidence, admission.call_id),
                 journal=resources.journal, classify=self._classify, draw_jitter=self._draw_jitter, control=control)
-            return await SynchronousInvocation(executor,
-                PostgresInvocationSettlement(self._store, admission.call_id)).execute(
+            settlement = (PostgresInvocationSettlement(self._store, admission.call_id)
+                          if query.output_format is None else
+                          PostgresInvocationSettlement(self._store, admission.call_id, structured_output=True))
+            return await SynchronousInvocation(executor, settlement).execute(
                     plan.full, policy=plan.retry, deadline=deadline)

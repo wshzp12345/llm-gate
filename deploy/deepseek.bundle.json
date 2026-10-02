@@ -13,7 +13,7 @@
     }},
     "provider_model_bindings": {"deepseek-text": {
       "status": "enabled", "provider": "deepseek", "upstream_model": "deepseek-v4-flash",
-      "capabilities": {"streaming": false, "tool_calling": false, "structured_output": "none"},
+      "capabilities": {"streaming": false, "tool_calling": false, "structured_output": "json_object"},
       "limits": {"context_tokens": 8192, "max_output_tokens": 4096}, "pricing_table": "smoke-price"
     }},
     "model_aliases": {"general": {

@@ -6,7 +6,7 @@ from typing import Protocol
 from llm_gateway.application.streaming_attempt_execution import StreamOutputPort
 from uuid import UUID
 
-from llm_gateway.domain.model import Message, ProviderFailure, ProviderResult
+from llm_gateway.domain.model import Message, OutputFormat, ProviderFailure, ProviderResult
 from llm_gateway.domain.routing_failure import UnattemptedRoutingFailure
 from llm_gateway.domain.prompts import PromptReference, PromptSelection
 
@@ -35,12 +35,15 @@ class TextInvocationQuery:
     prompt_reference: PromptReference | None = None
     stream: bool = False
     stream_output: StreamOutputPort | None = field(default=None, repr=False, compare=False)
+    output_format: OutputFormat | None = None
 
     def __post_init__(self):
         if type(self.stream) is not bool or self.stream != (self.stream_output is not None):
             raise ValueError("Streaming query requires an explicit output port")
         if self.stream and any(not callable(getattr(self.stream_output, method, None)) for method in ("delta", "admitted")):
             raise ValueError("Streaming output must implement admission metadata and delta")
+        if self.output_format is not None and not isinstance(self.output_format, OutputFormat):
+            raise ValueError("Typed output format required")
 
 
 @dataclass(frozen=True)

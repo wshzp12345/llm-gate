@@ -46,6 +46,15 @@ services:
       interval: 1s
       timeout: 2s
       retries: 20
+  provider-c:
+    image: python:3.12-slim
+    command: ["python", "/acceptance/provider.py", "messages"]
+    volumes: ["./provider.py:/acceptance/provider.py:ro"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
   gateway:
     image: llm-gateway:dev
     command: ["--bootstrap", "/fixtures/bootstrap.json", "--enable-streaming"]
@@ -70,6 +79,21 @@ services:
     depends_on:
       gateway: {condition: service_healthy}
       collector: {condition: service_started}
+  verify-limits:
+    image: llm-gateway:dev
+    profiles: [acceptance-extra]
+    entrypoint: ["python", "/acceptance/verify_limits.py"]
+    volumes: ["./verify_limits.py:/acceptance/verify_limits.py:ro"]
+    depends_on:
+      gateway: {condition: service_healthy}
+  verify-protocols:
+    image: llm-gateway:dev
+    profiles: [acceptance-extra]
+    entrypoint: ["python", "/acceptance/verify_protocols.py"]
+    volumes: ["./verify_protocols.py:/acceptance/verify_protocols.py:ro"]
+    depends_on:
+      gateway: {condition: service_healthy}
+      provider-c: {condition: service_healthy}
   collector:
     image: otel/opentelemetry-collector:0.160.0
     network_mode: service:gateway

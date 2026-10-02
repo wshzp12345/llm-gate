@@ -17,5 +17,6 @@ def project_transport_credentials(snapshot, binding_ids, registry):
         provider_id = content["provider_model_bindings"][binding_id]["provider"]
         provider = content["providers"][provider_id]
         result[binding_id] = CredentialBinding(provider["credential"]["secret_ref"],
-            provider["endpoint"]["base_url"], partial(registry.acquire, plans[provider_id]))
+            provider["endpoint"]["base_url"], partial(registry.acquire, plans[provider_id]),
+            provider["adapter"]["type"], provider["adapter"]["version"])
     return result

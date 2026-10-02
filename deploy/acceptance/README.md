@@ -9,7 +9,17 @@ docker compose -f deploy/acceptance/compose.yaml logs verify
 docker compose -f deploy/acceptance/compose.yaml ps -a
 # verify 退出 0、Collector 完成接收后核对遥测
 .venv/Scripts/python.exe deploy/acceptance/verify_telemetry.py
+
+# 在相同隔离项目中，完成原四调用与遥测核对后再运行；只调用合成 Provider
+docker compose -f deploy/acceptance/compose.yaml run --rm --no-deps verify-limits
+
+# 同一全新隔离项目中，最后验证第二种上游协议及 Schema 特性预检；仅使用合成凭证 C
+docker compose -f deploy/acceptance/compose.yaml run --rm --no-deps verify-protocols
 ```
+
+`verify-protocols` 在已发布配置上新增独立的 `messages` Alias、`anthropic_messages/v1` Binding 和合成 Provider C，不修改 `general` 的候选或五次/分钟限额。开放对象 Schema 应在 Provider I/O 前返回 422；显式 `additionalProperties: false` 的 Schema 应发到 `/v1/messages`，并将合成响应和 5/3 Token 用量映射回统一协议。它只证明 Docker/API 上两个协议的路由与映射，**不是真实 Anthropic 调用证据**；运行前须先完成 `verify`、`verify_telemetry.py`、`verify-limits`。无第二协议凭证时不要将此结果表述为真实供应商验收。
+
+`verify-limits` 要求前四次逻辑调用和 8 次上游请求已经由 `verify` 完成；它核对首次请求中的同候选重试及跨候选恢复保留相同意图，且首个同候选重试遵守合成 Provider 的一秒 `Retry-After`，然后发送第五次合法请求。第六次必须在 Gateway 返回 JSON 429 / `rate_limited`，没有 call_id，且两个合成 Provider 的请求记录不增加。先运行 `verify_telemetry.py`，因为它按原四次调用核对精确计数。该演示使用正常 Docker Gateway/HTTP/配置/限速路径，真实 Provider 调用为零；指数退避及全抖动的数值边界仍由策略测试精确验证。
 
 `verify` 必须退出 0，并输出 `status=passed`：主候选返回 503，两次 Attempt 后切换第二供应商，第三次成功。
 现在验收同步恢复、输出后截断、客户端断连和流式恢复四次调用，分别输出通过记录（mode 为 broken/disconnect/stream；同步记录无 mode）。验收容器通过 `--enable-streaming` 同时开启模型 API 和配置能力验证。

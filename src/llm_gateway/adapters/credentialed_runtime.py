@@ -12,6 +12,8 @@ from typing import Protocol
 import httpx
 
 from llm_gateway.adapters.openai_compatible import OpenAICompatibleCompletion
+from llm_gateway.adapters.anthropic_messages import AnthropicMessagesCompletion
+from llm_gateway.adapters.structured_output import validate_structured_result, validate_structured_stream
 from llm_gateway.adapters.egress_pool import ProviderTransportRetired
 from llm_gateway.adapters.provider_credentials import (
     CredentialMetadata, CredentialUnavailable, ProviderCredentialLease,
@@ -30,6 +32,8 @@ class CredentialBinding:
     secret_ref: str
     base_url: str = field(repr=False)
     client: httpx.AsyncClient | Callable[[], httpx.AsyncClient] = field(repr=False)
+    adapter_type: str = "compatible"
+    adapter_version: str = "v1"
 
 
 class CredentialedCandidateRuntime:
@@ -82,15 +86,23 @@ class _LeasedCompletion:
         self._used = False
         self._adapter = None
 
+    def _new_adapter(self):
+        adapters = {("compatible", "v1"): OpenAICompatibleCompletion,
+                    ("anthropic_messages", "v1"): AnthropicMessagesCompletion}
+        adapter = adapters.get((self._binding.adapter_type, self._binding.adapter_version))
+        if adapter is None:
+            raise ValueError("Unregistered Provider Adapter contract")
+        return adapter(self._binding.client, base_url=self._binding.base_url,
+                       credential=self._lease.bearer_value())
+
     async def complete(self, request, *, context=None):
         if self._used:
             raise RuntimeError("Provider Attempt cannot be reused")
         self._used = True
-        adapter = OpenAICompatibleCompletion(self._binding.client, base_url=self._binding.base_url,
-                                             credential=self._lease.bearer_value())
+        adapter = self._new_adapter()
         self._adapter = adapter
         try:
-            result = await adapter.complete(request, context=context)
+            result = validate_structured_result(await adapter.complete(request, context=context), request.output_format)
         finally:
             # The cancellation handle must not retain the credential-bearing
             # Adapter after its Attempt scope has ended.
@@ -103,11 +115,13 @@ class _LeasedCompletion:
         if self._used:
             raise RuntimeError("Provider Attempt cannot be reused")
         self._used = True
-        adapter = OpenAICompatibleCompletion(self._binding.client, base_url=self._binding.base_url,
-                                             credential=self._lease.bearer_value())
+        adapter = self._new_adapter()
         self._adapter = adapter
         try:
-            async with aclosing(adapter.stream(request, context=context)) as events:
+            source = adapter.stream(request, context=context)
+            if request.output_format is not None:
+                source = validate_structured_stream(source, request.output_format)
+            async with aclosing(source) as events:
                 async for event in events:
                     if isinstance(event, StreamFailed) and event.failure.code == FailureCode.PROVIDER_CREDENTIALS_UNAVAILABLE:
                         self._rejected_versions.add(self._identity)

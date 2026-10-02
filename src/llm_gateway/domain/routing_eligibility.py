@@ -21,6 +21,7 @@ class StaticServiceRequirement:
     structured_output: str
     max_output_tokens: int
     provider_override: str | None = None
+    schema_features: tuple[str, ...] = ()
 
     def __post_init__(self):
         if type(self.streaming) is not bool or type(self.tool_calling) is not bool or self.structured_output not in _STRUCTURED:
@@ -29,6 +30,13 @@ class StaticServiceRequirement:
             raise ValueError("Invalid output token limit")
         if self.provider_override is not None and not _resource_id(self.provider_override):
             raise ValueError("Invalid Provider override")
+        if (not isinstance(self.schema_features, (tuple, list))
+                or any(not _resource_id(feature) for feature in self.schema_features)
+                or tuple(sorted(set(self.schema_features))) != tuple(self.schema_features)
+                or self.schema_features and self.structured_output != "json_schema"):
+            raise ValueError("Invalid Schema feature requirement")
+        if isinstance(self.schema_features, list):
+            object.__setattr__(self, "schema_features", tuple(self.schema_features))
 
 
 @dataclass(frozen=True)
@@ -40,6 +48,7 @@ class StaticCandidate:
     binding_enabled: bool
     capabilities: AdapterCapabilities
     max_output_tokens: int
+    schema_features: frozenset[str] = frozenset()
 
     def __post_init__(self):
         if not _resource_id(self.provider) or not isinstance(self.resolved_model, str) or not self.resolved_model:
@@ -51,6 +60,8 @@ class StaticCandidate:
             raise ValueError("Invalid structured capability")
         if type(self.max_output_tokens) is not int or self.max_output_tokens < 1:
             raise ValueError("Invalid Binding limit")
+        if not isinstance(self.schema_features, frozenset) or any(not _resource_id(feature) for feature in self.schema_features):
+            raise ValueError("Invalid Adapter Schema feature profile")
 
 
 @dataclass(frozen=True)
@@ -97,6 +108,10 @@ def assess_static_candidates(requirement: StaticServiceRequirement, candidates: 
             reject(1, "capability_mismatch", "tool_calling")
         if _STRUCTURED[requirement.structured_output] > _STRUCTURED[candidate.capabilities.structured_output]:
             reject(1, "capability_mismatch", "structured_output." + requirement.structured_output)
+        elif requirement.structured_output == "json_schema":
+            for feature in requirement.schema_features:
+                if feature not in candidate.schema_features:
+                    reject(1, "capability_mismatch", "structured_output.feature." + feature)
         if requirement.max_output_tokens > candidate.max_output_tokens:
             reject(1, "limit_exceeded", "max_output_tokens")
         if requirement.provider_override is not None and requirement.provider_override != candidate.provider:

@@ -14,8 +14,9 @@ from llm_gateway.infrastructure.unattempted_settlement import settle_unattempted
 
 
 class PostgresInvocationSettlement:
-    def __init__(self, store, call_id):
+    def __init__(self, store, call_id, *, structured_output=False):
         self._store, self._call_id = store, call_id
+        self._structured_output = structured_output
 
     async def settle_exhausted(self):
         return await settle_unattempted_route(self._store, self._call_id)
@@ -78,13 +79,17 @@ class PostgresInvocationSettlement:
             def total(field):
                 values = [row[field] for row in attempts]
                 return sum(values) if all(value is not None for value in values) else None
+            validation_status = ("not_requested" if not self._structured_output else
+                "valid" if success and not refused else
+                "invalid" if not success and result.code == FailureCode.STRUCTURED_OUTPUT_INVALID else "unavailable")
             cursor = await connection.execute("""
                 INSERT INTO invocation_settlement(call_id,outcome,error_code,resolved_model,finish_reason,service_level,
                     attempt_count,input_tokens,output_tokens,cached_tokens,reasoning_tokens,validation_status,safety_refused)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'not_requested',%s) RETURNING terminal_at
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING terminal_at
                 """, (self._call_id, outcome, error, last["resolved_model"],
                       last["finish_reason"] if success else None, service_level, len(attempts),
-                      *(total(field) for field in ("input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens")), refused))
+                      *(total(field) for field in ("input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens")),
+                      validation_status, refused))
             terminal_at = (await cursor.fetchone())[0]
             await summarize_invocation_cost(connection, self._call_id)
             await _append_event(connection, self._call_id, "routing_terminal", {

@@ -12,7 +12,7 @@ from llm_gateway.domain.model import FailureCode, ProviderFailure
 def classify_text_failure(failure: ProviderFailure) -> FailureRecovery:
     if not isinstance(failure, ProviderFailure) or not isinstance(failure.code, FailureCode) or type(failure.retryable) is not bool:
         raise TypeError("Normalized text Provider failure required")
-    if failure.code in {FailureCode.INVALID_REQUEST, FailureCode.UNCERTAIN}:
+    if failure.code in {FailureCode.INVALID_REQUEST, FailureCode.STRUCTURED_OUTPUT_INVALID, FailureCode.UNCERTAIN}:
         return FailureRecovery(False, False)
     if failure.code in {FailureCode.PROVIDER_CREDENTIALS_UNAVAILABLE, FailureCode.PROVIDER_PROTOCOL_ERROR}:
         return FailureRecovery(False, True)

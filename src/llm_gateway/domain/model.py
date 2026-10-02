@@ -6,6 +6,7 @@ from enum import StrEnum
 
 class FailureCode(StrEnum):
     INVALID_REQUEST = "invalid_request"
+    STRUCTURED_OUTPUT_INVALID = "structured_output_invalid"
     RATE_LIMITED = "rate_limited"
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     PROVIDER_CREDENTIALS_UNAVAILABLE = "provider_credentials_unavailable"
@@ -21,6 +22,8 @@ class ProviderFailure:
     retry_after_ms: int | None = None
     observed_usage: Usage | None = None
     observed_model: str | None = None
+    structured_reason: str | None = None
+    structured_path: str | None = None
 
     def __post_init__(self):
         if self.retry_after_ms is not None and (type(self.retry_after_ms) is not int or self.retry_after_ms < 0):
@@ -31,6 +34,8 @@ class ProviderFailure:
             if type(self.observed_model) is not str or not self.observed_model or len(self.observed_model) > 256:
                 raise ValueError("Invalid observed model")
             self.observed_model.encode("utf-8")
+        if self.structured_reason is not None and self.code != FailureCode.STRUCTURED_OUTPUT_INVALID:
+            raise ValueError("Structured reason requires a structured failure")
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,24 @@ class Message:
 
 
 @dataclass(frozen=True)
+class OutputFormat:
+    type: str
+    schema_name: str | None = None
+    schema_json: str | None = None
+    local_extraction: bool = False
+
+    def __post_init__(self) -> None:
+        if self.type not in {"json_object", "json_schema"}:
+            raise ValueError("Structured output mode required")
+        if self.type == "json_schema" and (not self.schema_name or not self.schema_json):
+            raise ValueError("Named JSON Schema required")
+        if self.type == "json_object" and (self.schema_name is not None or self.schema_json is not None):
+            raise ValueError("JSON Object mode cannot carry a Schema")
+        if type(self.local_extraction) is not bool:
+            raise ValueError("Structured extraction must be explicit")
+
+
+@dataclass(frozen=True)
 class CompletionRequest:
     requested_model: str
     resolved_model: str
@@ -53,6 +76,7 @@ class CompletionRequest:
     max_output_tokens: int
     temperature: float | None = None
     top_p: float | None = None
+    output_format: OutputFormat | None = None
 
     def __post_init__(self) -> None:
         if not self.requested_model or not self.resolved_model or not self.messages:
@@ -63,6 +87,8 @@ class CompletionRequest:
             raise ValueError("Temperature must be between zero and two")
         if self.top_p is not None and (type(self.top_p) not in (int, float) or not 0 < self.top_p <= 1):
             raise ValueError("Top-p must be greater than zero and at most one")
+        if self.output_format is not None and not isinstance(self.output_format, OutputFormat):
+            raise ValueError("Typed output format required")
 
 
 @dataclass(frozen=True)

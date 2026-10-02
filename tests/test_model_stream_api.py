@@ -8,6 +8,7 @@ import pytest
 
 from llm_gateway.adapters.model_http import create_development_model_app
 from llm_gateway.application.model_api import InvocationReply, ModelInvocationRejected
+from llm_gateway.domain.model import FailureCode, ProviderFailure
 from llm_gateway.domain.streaming import DeltaKind, StreamDelta
 from tests.test_attempt_execution import SUCCESS
 from tests.test_model_http import PAYLOAD
@@ -65,6 +66,29 @@ def test_stream_backend_exception_mapping(after_delta):
             response = await client.post("/v1/chat/completions", json=PAYLOAD | {"stream": True})
         assert response.status_code == (200 if after_delta else 429)
         assert "rate_limited" in response.text and "[DONE]" not in response.text
+    asyncio.run(scenario())
+
+
+def test_structured_failure_after_json_delta_has_error_frame_and_no_done():
+    async def scenario():
+        class StructuredFailure(Service):
+            async def invoke(self, query):
+                assert query.output_format.type == "json_object"
+                query.stream_output.admitted(CALL, ACCEPTED)
+                await query.stream_output.delta(StreamDelta(1, "model", DeltaKind.TEXT, '{"answer":'))
+                return InvocationReply(CALL, ACCEPTED, ProviderFailure(
+                    FailureCode.STRUCTURED_OUTPUT_INVALID, False, structured_reason="json_malformed"))
+
+        app = create_development_model_app(StructuredFailure(), enable_streaming=True)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+            response = await client.post("/v1/chat/completions", json=PAYLOAD | {
+                "stream": True, "response_format": {"type": "json_object"}})
+        assert response.status_code == 200
+        frames = [json.loads(frame[6:]) for frame in response.text.strip().split("\n\n")]
+        assert frames[0]["choices"][0]["delta"] == {"content": '{"answer":'}
+        assert frames[1]["error"]["code"] == "structured_output_invalid"
+        assert frames[1]["error"]["gateway"] == {"reason": "json_malformed"}
+        assert "[DONE]" not in response.text
     asyncio.run(scenario())
 
 

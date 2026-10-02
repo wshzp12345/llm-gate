@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, ValidationError
 from llm_gateway.adapters.model_stream_http import ModelStreamResponse
+from llm_gateway.adapters.structured_output import InvalidOutputFormat, parse_output_format
 from llm_gateway.application.request_trace import RequestTrace, TraceStage, current_trace
 from llm_gateway.adapters.trace_context import incoming_trace, business_correlation
 
@@ -51,16 +52,17 @@ class TextRequest(BaseModel):
     store: StrictBool = False
     temperature: Annotated[float, Field(ge=0, le=2)] | None = None
     top_p: Annotated[float, Field(gt=0, le=1)] | None = None
+    response_format: dict[str, object] | None = None
 
 
 _UNIMPLEMENTED_FIELDS = {
     "stop", "presence_penalty", "frequency_penalty", "reasoning_effort", "verbosity",
-    "stream_options", "response_format", "tools", "tool_choice", "parallel_tool_calls", "functions", "function_call", "seed",
+    "stream_options", "tools", "tool_choice", "parallel_tool_calls", "functions", "function_call", "seed",
     "modalities", "audio", "logprobs", "top_logprobs", "logit_bias", "prediction", "service_tier", "web_search_options",
     "metadata", "safety_identifier", "user", "prompt_cache_key", "prompt_cache_retention", "gateway",
 }
 _STATUS = {
-    "invalid_request": 400, "request_too_large": 413, "unsupported_media_type": 415,
+    "invalid_request": 400, "structured_output_invalid": 400, "request_too_large": 413, "unsupported_media_type": 415,
     "unsupported_capability": 422, "rate_limited": 429, "provider_protocol_error": 502,
     "gateway_not_ready": 503, "provider_unavailable": 503, "provider_credentials_unavailable": 503,
     "persistence_unavailable": 503, "upstream_timeout": 504, "deadline_exceeded": 504,
@@ -75,19 +77,23 @@ class ApiFailure(Exception):
         self.code = code
 
 
-def _error(code):
+def _error(code, *, reason=None, path=None):
     trace = current_trace()
     if trace is not None:
         trace.mark_http_failed()
-    return JSONResponse({"error": {"code": code, "type": "gateway_error", "param": None,
-                                   "message": "Gateway could not complete the request."}}, status_code=_STATUS[code],
+    detail = {"code": code, "type": "gateway_error", "param": None,
+              "message": "Gateway could not complete the request."}
+    if reason is not None:
+        detail["gateway"] = {"reason": reason, **({"path": path} if path is not None else {})}
+    return JSONResponse({"error": detail}, status_code=_STATUS[code],
                         headers={"WWW-Authenticate": "Bearer"} if code == "unauthorized" else None)
 
 
 def _response(reply):
     result = reply.result
     if isinstance(result, (ProviderFailure, UnattemptedRoutingFailure)):
-        response = _error(result.code)
+        response = _error(result.code, reason=getattr(result, "structured_reason", None),
+                          path=getattr(result, "structured_path", None))
     else:
         usage = result.usage
         known = (usage.input_tokens, usage.output_tokens, usage.cached_tokens, usage.reasoning_tokens)
@@ -224,6 +230,10 @@ def create_development_model_app(service: ModelInvocationPort | None = None, *,
                 raise ApiFailure("invalid_request")
             if _UNIMPLEMENTED_FIELDS.intersection(value):
                 raise ApiFailure("unsupported_capability")
+            try:
+                output_format = parse_output_format(value["response_format"]) if "response_format" in value else None
+            except InvalidOutputFormat:
+                raise ApiFailure("invalid_request") from None
             if isinstance(value.get("messages"), list):
                 for message in value["messages"]:
                     if isinstance(message, dict):
@@ -252,11 +262,14 @@ def create_development_model_app(service: ModelInvocationPort | None = None, *,
                 raise ApiFailure("invalid_request")
             if (payload.stream and not enable_streaming) or payload.n != 1 or payload.store or any(message.role == "tool" for message in (payload.messages or [])):
                 raise ApiFailure("unsupported_capability")
+            if payload.stream and output_format is not None and output_format.type != "json_object":
+                raise ApiFailure("unsupported_capability")
             if service is None:
                 raise ApiFailure("gateway_not_ready")
             query = TextInvocationQuery(payload.model, tuple(Message(item.role, item.content) for item in (payload.messages or [])),
                                         payload.max_completion_tokens or payload.max_tokens,
-                                        "max_tokens" in value, "store" in value, payload.temperature, payload.top_p, len(body), prompt=selection)
+                                        "max_tokens" in value, "store" in value, payload.temperature, payload.top_p, len(body),
+                                        prompt=selection, output_format=output_format)
             if payload.stream:
                 return ModelStreamResponse(lambda output: invoke(replace(query, stream=True, stream_output=output)),
                                            error_response=_error)

@@ -5,7 +5,7 @@ secrets. Its immutable metadata is intended for execution Evidence/fingerprints.
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from llm_gateway.adapters.canonical_json import canonical_digest
 from llm_gateway.application.active_configuration import LoadedConfiguration
@@ -36,5 +36,11 @@ def prepare_text_completion(snapshot: LoadedConfiguration, query: TextInvocation
         raise ModelInvocationRejected("invalid_request")
     if values["max_output_tokens"] > binding["limits"]["max_output_tokens"]:
         raise ModelInvocationRejected("unsupported_capability")
-    request = CompletionRequest(query.requested_model, binding["upstream_model"], query.messages, **values)
+    output_format = query.output_format
+    if output_format is not None:
+        extraction = (content["resource_policies"]["structured_output"]["local_extraction_enabled"]
+                      and alias["structured_output"]["local_extraction"] != "disabled")
+        output_format = replace(output_format, local_extraction=extraction)
+    request = CompletionRequest(query.requested_model, binding["upstream_model"], query.messages,
+                                output_format=output_format, **values)
     return PreparedTextCompletion(request, tuple(sources), canonical_digest(values))

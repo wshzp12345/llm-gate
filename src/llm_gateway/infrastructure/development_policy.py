@@ -27,7 +27,10 @@ def _development_policy(*, known_secret_references=None, enable_streaming=False)
         replay_max_artifact_bytes=1048576,
         known_secret_references=frozenset({DEEPSEEK_SECRET_REFERENCE}) if known_secret_references is None else frozenset(known_secret_references),
         currency_codes=frozenset({"USD"}),
-        adapter_contracts={("compatible", "v1"): AdapterCapabilities(enable_streaming, False, "none")},
+        adapter_contracts={
+            ("compatible", "v1"): AdapterCapabilities(enable_streaming, False, "json_object"),
+            ("anthropic_messages", "v1"): AdapterCapabilities(False, False, "json_schema"),
+        },
     )
 
 

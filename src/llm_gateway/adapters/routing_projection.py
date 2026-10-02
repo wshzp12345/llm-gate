@@ -7,6 +7,7 @@ from llm_gateway.application.active_configuration import LoadedConfiguration
 from llm_gateway.domain.configuration_validation import AdapterCapabilities
 from llm_gateway.domain.routing_eligibility import StaticCandidate
 from llm_gateway.domain.routing_order import WeightedCandidate
+from llm_gateway.adapters.structured_output import adapter_schema_features
 
 
 class UnknownLogicalModel(Exception):
@@ -38,6 +39,7 @@ def project_alias(snapshot: LoadedConfiguration, requested_model: str) -> AliasR
             binding["provider"], binding["upstream_model"], provider["status"] == "enabled",
             binding["status"] == "enabled", AdapterCapabilities(**binding["capabilities"]),
             binding["limits"]["max_output_tokens"],
+            adapter_schema_features(provider["adapter"]["type"], provider["adapter"]["version"]),
         ))
     return AliasRoutingProjection(requested_model, snapshot.revision, alias["routing_policy"],
                                   policy["degradation"]["reduced_service"]["enabled"], tuple(candidates))

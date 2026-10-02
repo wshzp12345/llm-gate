@@ -7,7 +7,7 @@ name = "llm-gateway"
 version = "0.1.0.dev0"
 description = "Provider-neutral model gateway"
 requires-python = ">=3.12"
-dependencies = ["httpx==0.28.1", "httpcore==1.0.9", "psycopg[binary]==3.3.5", "rfc8785==0.1.4", "pydantic==2.13.5", "cryptography==50.0.1", "ruamel.yaml==0.19.1", "fastapi==0.141.1", "python-dotenv==1.2.1", "uvicorn==0.35.0"]
+dependencies = ["httpx==0.28.1", "httpcore==1.0.9", "psycopg[binary]==3.3.5", "rfc8785==0.1.4", "pydantic==2.13.5", "jsonschema==4.26.0", "cryptography==50.0.1", "ruamel.yaml==0.19.1", "fastapi==0.141.1", "python-dotenv==1.2.1", "uvicorn==0.35.0"]
 
 [project.optional-dependencies]
 test = ["pytest==8.4.2"]

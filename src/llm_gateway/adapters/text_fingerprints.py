@@ -41,7 +41,9 @@ def request_fingerprint(query: TextInvocationQuery, authorization: Authorization
         "stream": query.stream,
         "include_usage": query.stream,
         "opaque_tools": None,
-        "output_schema": None,
+        "output_schema": None if query.output_format is None else {
+            "type": query.output_format.type, "schema_name": query.output_format.schema_name,
+            "schema": json.loads(query.output_format.schema_json) if query.output_format.schema_json else None},
         "semantic_extensions": {},
         "caller_invocation_deadline": None,
     }
@@ -51,6 +53,8 @@ def request_fingerprint(query: TextInvocationQuery, authorization: Authorization
         profile = "gateway.request-fingerprint/prompt-text-v1"
     if query.stream:
         profile = "gateway.request-fingerprint/" + ("prompt-stream-text-v1" if query.prompt_reference else "stream-text-v1")
+    if query.output_format is not None:
+        profile += "/structured-v1"
     message = profile.encode("ascii") + canonical_bytes(projection)
     digest = lease.digest(message, purpose="request").hex()
     return FingerprintIdentity(profile, lease.fence.key_id, lease.fence.key_version, digest)
@@ -62,7 +66,7 @@ def execution_fingerprint(query: TextInvocationQuery, snapshot: LoadedConfigurat
 
     effective_limits must already resolve deployment inheritance. Revision,
     pricing/evidence retention, unrelated resources and TLS labels are not model
-    behavior. This text-only profile has no Schema or extraction pipeline.
+    behavior. Structured output adds the accepted Schema and extraction policy.
     """
     if type(query) is not TextInvocationQuery:
         raise ValueError("Validated text query required")
@@ -103,9 +107,15 @@ def execution_fingerprint(query: TextInvocationQuery, snapshot: LoadedConfigurat
         "safety": content["safety_policies"][alias["safety_policy"]],
         "effective_limits": effective_limits,
         "stream": query.stream,
-        "output_schema": None,
+        "output_schema": None if query.output_format is None else {
+            "type": query.output_format.type, "schema_name": query.output_format.schema_name,
+            "schema": json.loads(query.output_format.schema_json) if query.output_format.schema_json else None},
         "opaque_tools": None,
-        "structured_extraction": {"enabled": False, "pipeline": None},
+        "structured_extraction": {"enabled": bool(query.output_format and
+            content["resource_policies"]["structured_output"]["local_extraction_enabled"]
+            and alias["structured_output"]["local_extraction"] != "disabled"),
+            "pipeline": ("structured-stream-v1" if query.stream else "structured-sync-v1")
+            if query.output_format is not None else None},
     }
     profile = EXECUTION_PROFILE
     if query.prompt_reference is not None:
@@ -113,6 +123,8 @@ def execution_fingerprint(query: TextInvocationQuery, snapshot: LoadedConfigurat
         profile = "gateway.execution-fingerprint/prompt-text-v1"
     if query.stream:
         profile = "gateway.execution-fingerprint/" + ("prompt-stream-text-v1" if query.prompt_reference else "stream-text-v1")
+    if query.output_format is not None:
+        profile += "/structured-v1"
     message = profile.encode("ascii") + canonical_bytes(projection)
     digest = lease.digest(message, purpose="execution").hex()
     return FingerprintIdentity(profile, lease.fence.key_id, lease.fence.key_version, digest)

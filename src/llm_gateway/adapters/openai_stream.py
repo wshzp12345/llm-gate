@@ -135,6 +135,10 @@ async def _stream_completion(adapter, request, *, context=None):
         payload["temperature"] = request.temperature
     if request.top_p is not None:
         payload["top_p"] = request.top_p
+    if request.output_format is not None:
+        if request.output_format.type != "json_object":
+            raise ValueError("OpenAI-compatible stream cannot translate this output format")
+        payload["response_format"] = {"type": "json_object"}
     try:
         async with adapter._client.stream("POST", adapter._url, json=payload,
             headers={"Authorization": "Bearer " + adapter._credential}, follow_redirects=False) as response:

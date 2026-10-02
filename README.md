@@ -6,6 +6,24 @@ Implementation of the [approved v0.1 design](docs/README.md). A runnable develop
 
 For streaming requests after Docker startup, see [HTTP SSE requests and verification (PowerShell)](docs/docker-quickstart.md#docker-启动后直接请求-http-ssepowershell).
 
+With the published `general` model configured for streaming, a PowerShell client can call the Docker-hosted HTTP API directly. Each request may incur Provider usage:
+
+```powershell
+$body = '{"model":"general","stream":true,"max_completion_tokens":2048,"messages":[{"role":"user","content":"Count from 1 to 10."}]}'
+$body | curl.exe --noproxy "*" -N -i "http://127.0.0.1:8000/v1/chat/completions" -H "Content-Type: application/json" -H "Accept: text/event-stream" --data-binary "@-"
+```
+
+Check for `Content-Type: text/event-stream`, a nonempty `choices[0].delta.content`, a terminal `finish_reason`, and `data: [DONE]`. An error frame or a truncated stream is a failed call even when HTTP status is 200. For configuration checks and a script that verifies the full frame sequence, use the [Docker/API quick start](docs/docker-quickstart.md#流式入口使用).
+
+For a newly published `deploy/deepseek.bundle.json` configuration, synchronous JSON Object output can be requested directly (this also incurs Provider usage):
+
+```powershell
+$body = '{"model":"general","response_format":{"type":"json_object"},"max_completion_tokens":2048,"messages":[{"role":"user","content":"Reply with one JSON object containing an answer field."}]}'
+$body | curl.exe --noproxy "*" -i "http://127.0.0.1:8000/v1/chat/completions" -H "Content-Type: application/json" --data-binary "@-"
+```
+
+The Gateway independently checks JSON syntax and the object root. A published Binding must declare `json_object`; an already-active `none` configuration is not changed by editing the example file. `json_schema` requires a Binding using the `anthropic_messages/v1` Adapter with `json_schema` capability and a separately configured credential; its object Schemas must explicitly use `additionalProperties: false`, including nested objects, or feature-aware routing rejects them before Provider I/O. Strict `json_object` SSE is supported when the published Binding also enables streaming; Gateway validates the terminal JSON before `[DONE]`. JSON Schema SSE and wrapper extraction from streaming text remain unsupported.
+
 See [Docker setup and API smoke](docs/docker-quickstart.md). The unified `gateway --bootstrap ...` entrypoint uses a closed dev configuration; `docker compose up -d --build` starts PostgreSQL, an independent migration job and the two-listener Gateway. First configuration publication is explicit through the API; an empty database remains non-ready. Production configuration fails closed instead of falling back to bypass.
 
 The API-only `python deploy/smoke.py` explicitly validates, creates and publishes the supplied DeepSeek example, then sends one bounded model request. It incurs Provider usage and never runs as part of startup or pytest. A real Docker/DeepSeek smoke returned HTTP 200 and `OK`; restart and migration replay were also verified. Secret files stay outside the image and source control. Read the quick start before running it against an existing installation.
@@ -58,7 +76,7 @@ The component inventory below records historical incremental boundaries, not a c
 - Local PEM canonicalization, content-identity/CA/validity checks and Trust Bundle resource ceilings.
 - An injectable dev-only FastAPI management slice: validation, Candidate creation, Active read, YAML export, rollback Candidate creation and publication, exercised with ASGI and PostgreSQL tests.
 
-The Adapter is an internal component, not an independently deployable client: production egress enforcement, credential leases, deadlines, persistence, and application retry/fallback policy must be wired before live use. Streaming, Tool payloads and Structured Output are not yet implemented; the text-only slice rejects unsupported output instead of silently discarding it. It must not be registered as the full approved Adapter capability contract.
+The Adapters are internal components, not independently deployable clients: production egress enforcement, credential leases, deadlines, persistence, and application retry/fallback policy must be wired before live use. Ordinary text streaming, strict JSON Object SSE, synchronous JSON Object validation, and a restricted synchronous JSON Schema subset are available in the development Gateway. Full incremental structured streaming, Tool payloads, complete Schema-feature routing, and full structured recovery remain unsupported and must not be advertised as the full approved Adapter capability contract.
 
 See [implementation progress](docs/implementation-progress.md) for remaining work. The development synchronous Docker/API-to-DeepSeek milestone has been achieved; this is not full v0.1 acceptance.
 

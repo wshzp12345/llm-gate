@@ -10,7 +10,7 @@ from llm_gateway.adapters.configuration_json import ParseLimits
 from llm_gateway.adapters.model_http import create_development_model_app
 from llm_gateway.application.model_api import InvocationReply, ModelInvocationRejected
 from llm_gateway.domain.invocation import InvocationPersistenceUnavailable
-from llm_gateway.domain.model import Usage
+from llm_gateway.domain.model import FailureCode, ProviderFailure, Usage
 from tests.test_attempt_execution import SUCCESS, FAILURE
 
 
@@ -68,6 +68,54 @@ def test_deprecated_token_alias_and_store_false_are_preserved_for_evidence():
     del payload["max_completion_tokens"]
     assert request(service, json=payload).status_code == 200
     assert service.queries[0].deprecated_max_tokens and service.queries[0].store_false_requested
+
+
+def test_response_format_reaches_application_and_structured_stream_is_not_silently_accepted():
+    service = Service()
+    assert request(service, json=PAYLOAD | {"response_format": {"type": "text"}}).status_code == 200
+    assert service.queries[0].output_format is None
+    payload = PAYLOAD | {"response_format": {"type": "json_object"}}
+    assert request(service, json=payload).status_code == 200
+    assert service.queries[1].output_format.type == "json_object"
+    rejected = request(service, json=payload | {"stream": True})
+    assert rejected.status_code == 422 and len(service.queries) == 2
+
+
+def test_json_object_stream_reaches_application_only_when_streaming_is_enabled():
+    async def run():
+        service = Service()
+        app = create_development_model_app(service, enable_streaming=True)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+            response = await client.post("/v1/chat/completions", json=PAYLOAD | {
+                "stream": True, "response_format": {"type": "json_object"}})
+            schema = await client.post("/v1/chat/completions", json=PAYLOAD | {
+                "stream": True, "response_format": {"type": "json_schema", "json_schema": {
+                    "name": "answer", "schema": {"type": "object"}}}})
+        assert response.status_code == 200
+        assert service.queries[0].stream and service.queries[0].output_format.type == "json_object"
+        assert schema.status_code == 422 and len(service.queries) == 1
+    asyncio.run(run())
+
+
+def test_json_schema_request_is_preflighted_before_application():
+    service = Service()
+    schema = {"type": "object", "properties": {"answer": {"type": "integer"}},
+              "required": ["answer"], "additionalProperties": False}
+    payload = PAYLOAD | {"response_format": {"type": "json_schema", "json_schema": {
+        "name": "answer", "strict": True, "schema": schema}}}
+    assert request(service, json=payload).status_code == 200
+    assert service.queries[0].output_format.type == "json_schema"
+    assert request(service, json=payload | {"response_format": {"type": "json_schema", "json_schema": {
+        "name": "answer", "schema": {"$ref": "https://untrusted.invalid/schema"}}}}).status_code == 400
+    assert len(service.queries) == 1
+
+
+def test_invalid_structured_result_exposes_safe_gateway_reason():
+    result = ProviderFailure(FailureCode.STRUCTURED_OUTPUT_INVALID, False,
+                             structured_reason="schema_mismatch", structured_path="/answer")
+    response = request(Service(result))
+    assert response.status_code == 400
+    assert response.json()["error"]["gateway"] == {"reason": "schema_mismatch", "path": "/answer"}
 
 
 @pytest.mark.parametrize("changes,status", [

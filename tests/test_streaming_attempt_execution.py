@@ -6,8 +6,9 @@ import pytest
 
 from llm_gateway.application.attempt_execution import ExecutionCandidate
 from llm_gateway.application.streaming_attempt_execution import StreamingAttemptExecutor
+from llm_gateway.adapters.structured_output import validate_structured_stream
 from llm_gateway.application.text_failure_recovery import classify_text_failure
-from llm_gateway.domain.model import FailureCode, ProviderFailure, ProviderResult, TextOutput, Usage
+from llm_gateway.domain.model import FailureCode, OutputFormat, ProviderFailure, ProviderResult, TextOutput, Usage
 from llm_gateway.domain.recovery import RetryPolicy
 from llm_gateway.domain.streaming import StreamDelta, StreamCompleted, StreamFailed, DeltaKind
 from tests.test_completion import REQUEST
@@ -26,9 +27,10 @@ def failure(sequence=1, code=FailureCode.PROVIDER_UNAVAILABLE, usage=Usage()):
 
 
 class Harness:
-    def __init__(self, scripts, *, fail_delivery=False):
+    def __init__(self, scripts, *, fail_delivery=False, structured=False):
         self.scripts, self.calls, self.events, self.sent = scripts, [], [], []
         self.active, self.closed, self.fail_delivery = 0, 0, fail_delivery
+        self.structured = structured
 
     @asynccontextmanager
     async def acquire(self, binding):
@@ -38,7 +40,12 @@ class Harness:
             async def stream(self, request, *, context=None):
                 owner.calls.append((binding, request))
                 try:
-                    for event in owner.scripts.pop(0):
+                    script = owner.scripts.pop(0)
+                    async def source():
+                        for event in script:
+                            yield event
+                    events = validate_structured_stream(source(), OutputFormat("json_object")) if owner.structured else source()
+                    async for event in events:
                         yield event
                 finally:
                     owner.closed += 1
@@ -97,6 +104,36 @@ def test_postcommit_failure_is_terminal_even_when_provider_error_is_retryable(ki
     assert harness.events[-1][3] == "stop"
     assert harness.events[-1][2].usage == observed
     assert result.resolved_model == "actual"
+
+
+def test_structured_json_failure_after_commit_never_switches_candidate():
+    malformed = '{"answer":'
+    harness = Harness([[delta(malformed), success(text=malformed)]], structured=True)
+    result, executor = execute(harness)
+    assert isinstance(result, StreamFailed)
+    assert result.failure.code == FailureCode.STRUCTURED_OUTPUT_INVALID
+    assert result.failure.structured_reason == "json_malformed"
+    assert executor.committed and [item.text for item in harness.sent] == [malformed]
+    assert len(harness.calls) == 1 and harness.events[-1][3] == "stop"
+
+
+def test_structured_invalid_root_before_commit_does_not_spend_fallback():
+    harness = Harness([[delta("not json"), success(text="not json")]], structured=True)
+    result, executor = execute(harness)
+    assert isinstance(result, StreamFailed)
+    assert result.failure.structured_reason == "json_wrong_root"
+    assert not executor.committed and not harness.sent
+    assert len(harness.calls) == 1 and harness.events[-1][3] == "stop"
+
+
+def test_structured_stream_stops_on_second_value_without_forwarding_suffix():
+    harness = Harness([[delta('{"answer":1}'), delta(' {"again":2}', sequence=2),
+                        success(sequence=3, text='{"answer":1} {"again":2}')]], structured=True)
+    result, executor = execute(harness)
+    assert isinstance(result, StreamFailed)
+    assert result.failure.structured_reason == "json_extraneous_content"
+    assert executor.committed and [item.text for item in harness.sent] == ['{"answer":1}']
+    assert len(harness.calls) == 1 and harness.closed == 1
 
 
 @pytest.mark.parametrize("script", [[delta(), success(), delta(sequence=3)], [delta()],

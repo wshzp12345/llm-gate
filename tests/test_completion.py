@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from llm_gateway.adapters.openai_compatible import OpenAICompatibleCompletion
-from llm_gateway.domain.model import CompletionRequest, FailureCode, Message, ProviderFailure, Usage
+from llm_gateway.domain.model import CompletionRequest, FailureCode, Message, OutputFormat, ProviderFailure, Usage
 
 
 REQUEST = CompletionRequest("general", "upstream-model", (Message("user", "hello"),), 32)
@@ -41,6 +41,21 @@ def test_request_translation_and_model_pair():
     assert result.resolved_model == "actual-model"
     assert result.output.text == "你好"
     assert result.usage == Usage()  # FR-719: no invented counts.
+
+
+def test_json_object_mode_is_forwarded_without_modifying_messages():
+    def handler(request):
+        payload = json.loads(request.content)
+        assert payload["response_format"] == {"type": "json_object"}
+        assert payload["messages"] == [{"role": "user", "content": "hello"}]
+        return httpx.Response(200, json=envelope())
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler), trust_env=False) as client:
+            return await OpenAICompatibleCompletion(client, base_url="https://provider.invalid/v1", credential="test-only").complete(
+                CompletionRequest("general", "upstream-model", (Message("user", "hello"),), 32,
+                                  output_format=OutputFormat("json_object")))
+    assert asyncio.run(run()).output.text == "你好"
 
 
 def test_usage_parent_total_excludes_subsets():

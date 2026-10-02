@@ -209,6 +209,10 @@ class OpenAICompatibleCompletion:
             payload["temperature"] = request.temperature
         if request.top_p is not None:
             payload["top_p"] = request.top_p
+        if request.output_format is not None:
+            if request.output_format.type != "json_object":
+                raise ValueError("OpenAI-compatible Adapter cannot translate this output format")
+            payload["response_format"] = {"type": "json_object"}
         try:
             async with self._client.stream(
                 "POST", self._url, json=payload,
